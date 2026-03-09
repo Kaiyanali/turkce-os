@@ -5,6 +5,15 @@ export async function POST(request: NextRequest) {
   try {
     const { messages, scenario } = await request.json();
 
+    if (!messages || messages.length === 0) {
+      return Response.json({
+        score: 0,
+        errors: ['No conversation to score'],
+        grammar_tip: 'Start a conversation first!',
+        summary: 'No messages found.',
+      });
+    }
+
     const conversationText = messages
       .map((m: { role: string; content: string }) => `${m.role}: ${m.content}`)
       .join('\n');
@@ -12,8 +21,10 @@ export async function POST(request: NextRequest) {
     const response = await anthropic.messages.create({
       model: MODEL,
       max_tokens: EXTENDED_MAX_TOKENS,
-      system:
-        'You are a Turkish language teacher scoring a student conversation. Respond with JSON only, no markdown.',
+      system: `You are a Turkish language teacher scoring a student conversation.
+You MUST respond with ONLY a valid JSON object. No markdown, no code fences, no extra text.
+Use only ASCII characters in your JSON string values - no special quotes or unicode punctuation.
+Escape any quotes inside strings with backslash.`,
       messages: [
         {
           role: 'user',
@@ -22,10 +33,10 @@ export async function POST(request: NextRequest) {
 Conversation:
 ${conversationText}
 
-Return JSON in this exact format:
-{"score":7,"errors":["Error 1 explanation","Error 2 explanation","Error 3 explanation"],"grammar_tip":"One specific grammar rule to study based on the errors","summary":"A brief encouraging summary of how the student did"}
+Respond with ONLY this JSON (no other text):
+{"score": 7, "errors": ["error 1", "error 2"], "grammar_tip": "tip here", "summary": "summary here"}
 
-Score 1-10 where: 1-3 = many errors, limited Turkish, 4-6 = some errors but communicating, 7-8 = good with minor errors, 9-10 = excellent near-native.`,
+Score 1-10. If no errors, use empty array [].`,
         },
       ],
     });
@@ -33,22 +44,69 @@ Score 1-10 where: 1-3 = many errors, limited Turkish, 4-6 = some errors but comm
     const text =
       response.content[0].type === 'text' ? response.content[0].text : '';
 
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return Response.json(JSON.parse(jsonMatch[0]));
+    const parsed = safeParseLLMJson(text);
+    if (parsed) {
+      return Response.json(parsed);
     }
 
     return Response.json({
       score: 5,
-      errors: ['Could not parse detailed errors'],
+      errors: [],
       grammar_tip: 'Keep practicing!',
-      summary: text,
+      summary: 'Session completed. Keep up the good work!',
     });
-  } catch (error) {
-    console.error('Session score error:', error);
+  } catch (error: unknown) {
+    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Session score error:', errMsg);
     return Response.json(
-      { error: 'Failed to score session' },
+      { error: 'Failed to score session', detail: errMsg },
       { status: 500 }
     );
   }
+}
+
+function safeParseLLMJson(text: string): Record<string, unknown> | null {
+  // Try direct parse
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  // Extract JSON block
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+
+  let json = match[0];
+
+  // Fix common LLM JSON issues
+  json = json
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/\r?\n/g, ' ')
+    .replace(/,\s*([}\]])/g, '$1')
+    .replace(/\t/g, ' ');
+
+  try {
+    return JSON.parse(json);
+  } catch {}
+
+  // Regex extraction fallback
+  const scoreMatch = json.match(/"score"\s*:\s*(\d+)/);
+  const tipMatch = json.match(/"grammar_tip"\s*:\s*"([^"]*)"/);
+  const summaryMatch = json.match(/"summary"\s*:\s*"([^"]*)"/);
+  const errorsMatch = json.match(/"errors"\s*:\s*\[([^\]]*)\]/);
+
+  const errors: string[] = [];
+  if (errorsMatch) {
+    const items = errorsMatch[1].match(/"([^"]*)"/g);
+    if (items) {
+      items.forEach((item) => errors.push(item.replace(/"/g, '')));
+    }
+  }
+
+  return {
+    score: scoreMatch ? parseInt(scoreMatch[1]) : 5,
+    errors,
+    grammar_tip: tipMatch ? tipMatch[1] : 'Keep practicing!',
+    summary: summaryMatch ? summaryMatch[1] : 'Session completed.',
+  };
 }
