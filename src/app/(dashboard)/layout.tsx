@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase';
 import { MobileNav } from '@/components/navigation/mobile-nav';
 import { Sidebar } from '@/components/navigation/sidebar';
@@ -13,34 +14,34 @@ export default function DashboardLayout({
 }) {
   const [email, setEmail] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const router = useRouter();
   const supabase = createClient();
 
   useEffect(() => {
     const checkAuth = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        router.push('/login');
+        return;
+      }
+
+      setEmail(user.email || '');
+
+      // Seed vocabulary for new users
       try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
+        const { count } = await supabase
+          .from('vocabulary')
+          .select('*', { count: 'exact', head: true })
+          .eq('user_id', user.id);
 
-        if (user) {
-          setEmail(user.email || '');
-
-          // Seed vocabulary for new users
-          try {
-            const { count } = await supabase
-              .from('vocabulary')
-              .select('*', { count: 'exact', head: true })
-              .eq('user_id', user.id);
-
-            if (count === 0) {
-              await fetch('/api/seed', { method: 'POST' });
-            }
-          } catch {
-            // Ignore seed errors
-          }
+        if (count === 0) {
+          await fetch('/api/seed', { method: 'POST' });
         }
       } catch {
-        // No auth — continue in demo mode
+        // Ignore seed errors
       }
 
       setLoading(false);

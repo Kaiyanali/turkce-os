@@ -41,13 +41,12 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse;
   }
 
-  // TODO: Re-enable auth guard once Supabase tables are set up
   // Redirect unauthenticated users to login
-  // if (!user) {
-  //   const url = request.nextUrl.clone();
-  //   url.pathname = '/login';
-  //   return NextResponse.redirect(url);
-  // }
+  if (!user) {
+    const url = request.nextUrl.clone();
+    url.pathname = '/login';
+    return NextResponse.redirect(url);
+  }
 
   return supabaseResponse;
 }
